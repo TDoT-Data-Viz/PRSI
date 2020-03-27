@@ -1,9 +1,11 @@
 import arcpy as ap
 import numpy as np
 
-#### This is a WORK IN PROGRESS - certain elements are incomplete ####
+#### This is a WORK IN PROGRESS - certain elements are incomplete, but it will run through without errors
 
 ap.env.overwriteOutput = True
+
+# The following variables will all be parameters eventually
 
 ap.env.workspace = r"C:\Users\jj09443\working\PRSI\PSII\PSII Input Data.gdb"
 
@@ -48,7 +50,7 @@ def Rescale(table, in_field, out_field):
 
 
 def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
-    ap.AddMessage("Rescaling")
+    ap.AddMessage("Getting block group data")
 
     ap.SpatialJoin_analysis(int_fc, bg_fc, "int_bg_sj")
 
@@ -72,6 +74,8 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
 
     ap.MakeFeatureLayer_management(int_fc, "int_lyr")
 
+    #I haven't gotten this field mapping function to work correctly 
+    # yet, but it should limit the number of fields in the spatial join layer
     def fmap(in_t, fields):
         fms = ap.FieldMappings()
         for field in fields:
@@ -86,27 +90,47 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
         return fms
 
     fieldmap = fmap(int_fc, [["MSLINK", "MSLINK"]])
+
+    # POI counts are calculated at qtr mile intervals up to a mile.
+    # 4 consecutive spatial joins with interval count calculated as the
+    #  difference between consecutive join counts
+    # This could maybe be made into a function, as basically the same 
+    # process is used for land cover
     ap.AddMessage("initial join")
-    ap.SpatialJoin_analysis("int_lyr", poi, "Join5280", "JOIN_ONE_TO_ONE", "KEEP_ALL", "", "INTERSECT", "5280 FEET")
-    ap.AlterField_management("Join5280", "Join_Count", "POI5280ft", "POI5280ft")
+    ap.SpatialJoin_analysis(
+        "int_lyr", poi, "Join5280", "JOIN_ONE_TO_ONE", 
+        "KEEP_ALL", "", "INTERSECT", "5280 FEET")
+    ap.AlterField_management("Join5280", "Join_Count", 
+                            "POI5280ft", "POI5280ft")
 
     dist_ft = [3960, 2640, 1320]
 
     for dist in dist_ft:
         ap.AddMessage(dist)
-        #fields = ["TARGET_FID", "INTFID"] + [[field, field] for field in ap.ListFields("Join"+str(dist-1320)) if field.name.startswith("POI")]
-        #fieldmap = fmap("Join"+str(dist-1320), fields)
-        ap.SpatialJoin_analysis("Join{}".format(dist + 1320), poi, "Join"+str(dist), "JOIN_ONE_TO_ONE", "KEEP_ALL", "", "INTERSECT", str(dist) +" FEET")
-        ap.AlterField_management("Join"+str(dist), "Join_Count", "POI{}ft".format(str(dist)), "POI{}ft".format(str(dist)))
-        ap.CalculateField_management("Join"+str(dist), "POI{}ft".format(str(dist + 1320)), "!POI{}ft! - !POI{}ft!".format(str(dist + 1320), str(dist)), "PYTHON3")
+        ap.SpatialJoin_analysis(
+            "Join{}".format(dist + 1320), poi, "Join"+str(dist), 
+            "JOIN_ONE_TO_ONE", "KEEP_ALL", "", "INTERSECT", 
+            str(dist) +" FEET")
+        ap.AlterField_management(
+            "Join"+str(dist), "Join_Count", 
+            "POI{}ft".format(str(dist)), "POI{}ft".format(str(dist)))
+        ap.CalculateField_management(
+            "Join"+str(dist), "POI{}ft".format(str(dist + 1320)), 
+            "!POI{}ft! - !POI{}ft!".format(str(dist + 1320), str(dist)), 
+            "PYTHON3")
 
     ap.AddMessage("Final POI Score")
     ap.AddField_management("Join1320", "POIScore", "DOUBLE")
-    ap.CalculateField_management("Join1320", "POIScore", """!POI5280ft! + (!POI3960ft!*2) + (!POI2640ft!*3) + (!POI1320ft!*4)""", "PYTHON3")
+    ap.CalculateField_management(
+        "Join1320", 
+        "POIScore", """!POI5280ft! + (!POI3960ft!*2) + 
+        (!POI2640ft!*3) + (!POI1320ft!*4)""", 
+        "PYTHON3")
     ap.AddMessage("Add to intersections")
     ap.AddField_management("int_lyr", "POIScore", "DOUBLE")
     ap.AddJoin_management("int_lyr", "MSLINK", "Join1320", "MSLINK")
-    ap.CalculateField_management("int_lyr", "POIScore", "!Join1320.POIScore!", "PYTHON3")
+    ap.CalculateField_management("int_lyr", "POIScore", 
+                            "!Join1320.POIScore!", "PYTHON3")
 
     Rescale(int_fc, "POIScore", "POIScore")
 
@@ -115,15 +139,23 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
     ap.CheckOutExtension("Spatial")
 
     ap.AddMessage("Reclassify")
-    ap.gp.Reclassify_sa(nlcd, "NLCD_Land_Cover_Class", "'Developed, Medium Intensity' 1;'Developed, High Intensity' 2", "LandCover", "NODATA")
+    ap.gp.Reclassify_sa(
+        nlcd, "NLCD_Land_Cover_Class", 
+        "'Developed, Medium Intensity' 1;'Developed, High Intensity' 2", 
+        "LandCover", "NODATA")
     ap.AddMessage("Raster to Polygon")
     ap.RasterToPolygon_conversion("LandCover", "nlcd_poly", 
                                     "SIMPLIFY", "Value")
     ap.AddMessage("Weighted Area")
     ap.AddField_management("nlcd_poly", "wArea", "DOUBLE")
     ap.MakeFeatureLayer_management("nlcd_poly", "lc_lyr", "gridcode <=2")
-    ap.CalculateField_management("lc_lyr", "wArea", "!shape.area@squarefeet!*!gridcode!", "PYTHON3")
+    ap.CalculateField_management(
+        "lc_lyr", "wArea", "!shape.area@squarefeet!*!gridcode!", 
+        "PYTHON3")
 
+    # The following is nearly the same as the process for getting POI scores. 
+    # Rather than calculate scores from feature counts, a field map merge
+    # rule is used to get the total weighted area in each interval.
     ap.AddMessage("initial join")
     fms = ap.FieldMappings()
     fms.addTable("nlcd_poly")
@@ -135,8 +167,11 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
     fms.replaceFieldMap(wAreaIndex, fieldmap)
 
 
-    ap.SpatialJoin_analysis("int_lyr", "nlcd_poly", "Join5280", "JOIN_ONE_TO_ONE", "KEEP_ALL", fms, "INTERSECT", "5280 FEET")
-    ap.AlterField_management("Join5280", "wArea", "LC5280ft", "LC5280ft")
+    ap.SpatialJoin_analysis(
+        "int_lyr", "nlcd_poly", "Join5280", "JOIN_ONE_TO_ONE", 
+        "KEEP_ALL", fms, "INTERSECT", "5280 FEET")
+    ap.AlterField_management("Join5280", "wArea", 
+                            "LC5280ft", "LC5280ft")
 
     dist_ft = [3960, 2640, 1320]
 
@@ -150,13 +185,24 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
         fieldmap = fms.getFieldMap(wAreaIndex)
         fieldmap.mergeRule = "sum"
         fms.replaceFieldMap(wAreaIndex, fieldmap)
-        ap.SpatialJoin_analysis("Join"+str(dist + 1320), "nlcd_poly", "Join"+str(dist), "JOIN_ONE_TO_ONE", "KEEP_ALL", fms, "INTERSECT", str(dist) +" FEET")
-        ap.AlterField_management("Join"+str(dist), "wArea", "LC{}ft".format(str(dist)), "LC{}ft".format(str(dist)))
-        ap.CalculateField_management("Join"+str(dist), "LC{}ft".format(str(dist + 1320)), "!LC{}ft! - !LC{}ft!".format(str(dist + 1320), str(dist)), "PYTHON3")
+        ap.SpatialJoin_analysis(
+            "Join"+str(dist + 1320), "nlcd_poly", "Join"+str(dist), 
+            "JOIN_ONE_TO_ONE", "KEEP_ALL", fms, "INTERSECT", 
+            str(dist) +" FEET")
+        ap.AlterField_management(
+            "Join"+str(dist), "wArea", "LC{}ft".format(str(dist)), 
+            "LC{}ft".format(str(dist)))
+        ap.CalculateField_management(
+            "Join"+str(dist), "LC{}ft".format(str(dist + 1320)), 
+            "!LC{}ft! - !LC{}ft!".format(str(dist + 1320), str(dist)), 
+            "PYTHON3")
 
     ap.AddMessage("Final LC Score")
     ap.AddField_management("Join1320", "LCScore", "DOUBLE")
-    ap.CalculateField_management("Join1320", "LCScore", """!LC5280ft! + (!LC3960ft!*2) + (!LC2640ft!*3) + (!LC1320ft!*4)""", "PYTHON3")
+    ap.CalculateField_management("Join1320", "LCScore", 
+                                """!LC5280ft! + (!LC3960ft!*2) + 
+                                (!LC2640ft!*3) + (!LC1320ft!*4)""", 
+                                "PYTHON3")
     ap.AddMessage("Add to intersections")
     ap.AddField_management("int_lyr", "LCScore", "DOUBLE")
     ap.AddJoin_management("int_lyr", "MSLINK", "Join1320", "MSLINK")
@@ -169,7 +215,9 @@ def Demand(int_fc, bg_fc, emp_field, pop_field, mode_field, nlcd, poi):
         
         """
 
-    ap.CalculateField_management("int_lyr", "LCScore", "!Join1320.LCScore!", "PYTHON3")
+    ap.CalculateField_management(
+        "int_lyr", "LCScore", "NoNulls(!Join1320.LCScore!)", 
+        "PYTHON3", codeblock)
     ap.Delete_management("int_lyr")
 
     Rescale(int_fc, "LCScore", "LCScore")
