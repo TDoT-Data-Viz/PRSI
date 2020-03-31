@@ -1,31 +1,36 @@
 # Corridor Infrastructure (INFRA)
 
-_Inputs: Planning Areas (Polygon), NLCD Land Cover Class (Raster), Active Businesses (Point), Block Groups w/ Pop Density - Emp Density - Active Commute (Polygon), Colleges (Point), Supplemental Colleges (Point), Private Schools (Point), Public Schools (Point), Transit (Polyline)_
+_Inputs: Trims Tables (RD_SGMNT, TRAFFIC, GEOMETRICS, RDWAY_DESCR)_
 
-The Demand layer is spatially derived. It looks at points of attraction including active businesses, transit stops, colleges, schools, and hospitals to develop a score based on the distance to these points. It also takes into account population density, employment density, and commuter information. To create this layer, run the demand.py script. This script uses the Euclidean Distance tool to generate a series of rasters from the vector inputs. The rasters created indicate the distance from the vector feature to the the surrounding areas and are then reclassified 1-5 based on set distance groups. See the scoring table below.
+This layer similar to the LTS layer of the MPT. It looks at features of road segments including speed limit, pavement width, number of lanes, traffic volume, sidewalks and bike lanes to determine a infra score. To create this layer, run the INFRA script tool which uses the prsi_infra.py script. Arterials and collectors are treated separately, so this tool is ran for each functional class. You can choose the functional class using the drop-down in the tool. The tool also allows you to create the LTS layer for individual planning areas or groups. The current way we are doing things is separating MPO and Rural areas. So the INFRA script will be ran four times in order to create a statewide output — All MPO Collectors, All MPO Arterials, All RPO Collectors, All RPO Arterials. 
 
-| Distance in Feet (Pedestrian) | Score | Distance in Feet (Bike)       | 
-| ----------------------------- | ----- | ----------------------------- | 
-| 0 - 1320                      | 5     | 0 - 5280                      | 
-| 1320 - 2640                   | 4     | 5280 - 10560                  | 
-| 2640 - 3960                   | 3     | 10560 - 15840                 | 
-| 3960  - 5280                  | 2     | 15840 - 21120                 | 
-| 5280 +                        | 1     | 21120 +                       | 
+The INFRA script uses a series of overlays to create a road network that holds the infrastructure data of the road segments. 
+
+## Scoring
+
+Sidewalks and bikelanes are scored based on the number of sides of the road segment they appear.
 
 
-Three rasters are created from the block group polygons using ‘Pop_Density’, ‘Employ_Density’, and ‘Active_Commute’ as the scores. These raster are reclassified using the Slice tool. 
+| Number of Sides  | Score |
+| -----------------| ----- |
+| Do not exist     | 5     |
+| One side         | 3     |
+| Both sides       | 1     |
 
-The Land Cover Class layer is reclassified using the following criteria:
+A crossing risk score ('XingRiskScore') is determined by the number of lanes and the presence of a median or Two Way Turn Lane (TWTL.
 
-| Level of Development        | Score |
-| --------------------------- | ----- |
-| Developed, High Intensity   | 5     |
-| Developed, Medium Intensity | 4     |
-| Developed, Low Intensity    | 3     |
-| No Data                     | 1     |
+| Number of Lanes | Median or TWTL Present | Score | 
+| --------------- | ---------------------- | ------| 
+|       >2        |           No           |   5   | 
+|       >2        |           YES          |   3   | 
+|      <=2        |           -            |   1   | 
 
-A weighted sum of all of the above rasters is created and then reclassified into 5 classes using Slice tool (Natural Breaks).
+Lane,Speed and AADT scores are simply the values scaled between 1 and 5. 
 
-Zonal Statistics is performed using the block groups as the zones and the mean value as the statistic. This layer is then reclassified once more using the Slice tool (Natural Breaks) 
+The Infra Score is calculated by taking the average of the AADT, Lane, Speed, Bikelane, Sidewalk, and XingRisk Scores. 
 
-The output of the script is a polygon layer with a score 1 - 5. See script documentation for more information.
+The final output is a table of road segments with infrastructure information and scores. 
+
+
+See script documentation for more detailed information on the operations taking place.
+
